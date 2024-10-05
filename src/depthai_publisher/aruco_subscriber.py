@@ -161,7 +161,7 @@ class ArucoDetector():
         self.image_pub.publish(msg_out)  # Publish the processed image
 
 def main():
-    rospy.init_node('EGB349_vision', anonymous=True)
+    rospy.init_node('EGB450_vision', anonymous=True)
     rospy.loginfo("Processing images...")
 
     aruco_detect = ArucoDetector()
