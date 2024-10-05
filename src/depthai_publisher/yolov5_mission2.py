@@ -25,15 +25,9 @@ from std_msgs.msg import String # ROS message types for pose data and strings
 # import threading
 
 # YOLO Config File and Model Parameters
-<<<<<<< HEAD
-modelsPath = "/home/uavteam2/models"
-modelName = 'best_mission2'
-confJson = 'best_mission2.json'
-=======
 modelsPath = "/home/uavteam2/QUT_EGH450/src/depthai_publisher/src/depthai_publisher/models" # Path to models
 modelName = 'best_mission2' # Model name to use
 confJson = 'best_mission2.json' # Corresponding configuration file
->>>>>>> 2aa631b477aa9807da1c58cb785bd36650a6b7d4
 
 # COnstruct Config File and Model Parameters
 configPath = Path(f'{modelsPath}/{modelName}/{confJson}')
