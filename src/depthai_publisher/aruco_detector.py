@@ -6,8 +6,9 @@ from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge, CvBridgeError
 import numpy as np
 import os  # library for executing shell commands
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, UInt8
 from collections import defaultdict, deque
+import threading
 
 
 class ArucoDetector():
@@ -21,29 +22,56 @@ class ArucoDetector():
 
         # Marker detection publisher
         self.aruco_pub = rospy.Publisher(
-            '/processed_aruco/image/compressed', CompressedImage, queue_size=50)
-        rospy.loginfo("Publisher '/processed_aruco/image/compressed' initialised")
+            '/processed_aruco/image/compressed', CompressedImage, queue_size=10)
+        #rospy.loginfo("Publisher '/processed_aruco/image/compressed' initialised")
 
         # ArUco POSE estimator publisher
-        self.aruco_pub_pose = rospy.Publisher(
-            '/aruco_pose', Float32MultiArray, queue_size=50)
-        rospy.loginfo("Publisher '/aruco_pose' initialised for Autopilot Integration")
+        self.aruco_pub_detection = rospy.Publisher(
+            '/aruco_detection', Float32MultiArray, queue_size=10)
+        #rospy.loginfo("Publisher '/aruco_pose' initialised for Autopilot Integration")
         
         # Initialize CvBridge for converting ROS images to OpenCV format
         self.br = CvBridge()
+        self.frame = None
+        self.lock = threading.Lock()
+        self.new_frame_event = threading.Event()
+
         rospy.loginfo("CvBridge initialised")        
         self.image_sub = rospy.Subscriber('/camera/image/compressed', CompressedImage, self.img_callback)
         rospy.loginfo(f"Subscriber to topic '/camera/image/compressed' initialised")
 
         if not rospy.is_shutdown():  # To check if ROS is shutting down
             self.frame_sub = rospy.Subscriber(
-                '/depthai_node/image/compressed', CompressedImage, self.img_callback, buff_size=4) 
+                '/depthai_node/image/compressed', CompressedImage, self.img_callback, queue_size=1) 
         rospy.loginfo(f"Subscriber to topic '/depthai_node/image/compressed' initialised")
+
+        # Subscribe to the 'refined_pose' topic to trigger re-estimation
+        self.sub_pose_refined = rospy.Subscriber('refined_pose', UInt8, self.callback_refined_pose, queue_size=10)
 
         # Keep Unique IDs
         self.published_aruco_ids = set()
         # Store last 10 sets of coordinates for each marker
-        self.coordinate_buffers = defaultdict(lambda: deque(maxlen=10)) 
+        self.coordinate_buffers = defaultdict(lambda: deque(maxlen=5)) 
+        self.re_estimation = defaultdict(bool)
+
+        self.processing_thread = threading.Thread(target=self.process_frames)
+        self.processing_thread.daemon = True
+        self.processing_thread.start()
+
+    def callback_refined_pose(self, msg):
+        marker_ID = msg.data
+        rospy.loginfo(f"Received new UAV position to refine Marker POSE")
+
+        # if marker_ID not in self.re_estimation:
+        #     self.re_estimation[marker_ID] = False
+
+        # Set the flag to trigger re-estimation for this marker ID
+        if marker_ID < 100:
+            self.re_estimation[marker_ID] = True
+            rospy.loginfo(f"Re-estimation triggered for marker ID: {marker_ID}")
+        else:
+            self.re_estimation[marker_ID] = False
+            
 
     def img_callback(self, msg_in):
         try:
@@ -51,9 +79,24 @@ class ArucoDetector():
         except CvBridgeError as e:
             rospy.logerr(f"Error converting image: {e}")  # Log error if conversion fails
             return
+        
+        with self.lock:
+            self.frame = frame
+            self.new_frame_event.set()
+    
+    def process_frames(self):
+        while not rospy.is_shutdown():
+            self.new_frame_event.wait()
+            with self.lock:
+                frame = self.frame.copy()
+                self.new_frame_event.clear()
 
-        aruco = self.find_aruco(frame)  # Search for marker in the frame
-        self.publish_to_ros(aruco)  # Publish frame to ROS
+            processed_frame = self.find_aruco(frame)
+            
+            self.publish_to_ros(processed_frame)
+
+        # aruco = self.find_aruco(frame)  # Search for marker in the frame
+        # self.publish_to_ros(aruco)  # Publish frame to ROS
 
     def find_aruco(self, frame):
         (corners, ids, _) = cv2.aruco.detectMarkers(
@@ -80,20 +123,21 @@ class ArucoDetector():
                 self.coordinate_buffers[marker_ID].append(corners.flatten())
 
                 #  and marker_ID not in self.published_aruco_ids
+                if self.re_estimation[marker_ID]:
+                    if len(self.coordinate_buffers[marker_ID]) == 5 and marker_ID not in self.published_aruco_ids:
+                        # Compute average coordinates
+                        avg_corners = np.mean(self.coordinate_buffers[marker_ID], axis=0).reshape((4,2))
 
-                if len(self.coordinate_buffers[marker_ID]) == 10 and marker_ID not in self.published_aruco_ids:
-                    # Compute average coordinates
-                    avg_corners = np.mean(self.coordinate_buffers[marker_ID], axis=0).reshape((4,2))
+                        #Publish average coordinates
+                        aruco_detection_msg = Float32MultiArray()
+                        aruco_detection_msg.data = [float(marker_ID)] + [coord for point in avg_corners for coord in point]
 
-                    #Publish average coordinates
-                    aruco_detection_msg = Float32MultiArray()
-                    aruco_detection_msg.data = [float(marker_ID)] + [coord for point in avg_corners for coord in point]
+                        self.aruco_pub_detection.publish(aruco_detection_msg)
+                        rospy.loginfo("Published ArUco Identification and BBox corners: {}".format(aruco_detection_msg.data))
 
-                    self.aruco_pub_pose.publish(aruco_detection_msg)
-                    rospy.loginfo("Published ArUco Identification and BBox corners: {}".format(aruco_detection_msg.data))
-
-                    self.published_aruco_ids.add(marker_ID)
-                    self.coordinate_buffers[marker_ID].clear()
+                        #self.published_aruco_ids.add(marker_ID)
+                        self.re_estimation[marker_ID] = False
+                        self.coordinate_buffers[marker_ID].clear()
 
         return frame
     

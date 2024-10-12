@@ -15,7 +15,7 @@ import rospy
 import tf2_ros
 import tf_conversions
 from geometry_msgs.msg import TransformStamped
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, UInt8
 from sensor_msgs.msg import CompressedImage, Image, CameraInfo
 from cv_bridge import CvBridge, CvBridgeError
 from collections import defaultdict, deque
@@ -63,7 +63,7 @@ labels = nnMappings.get("labels", {})
 rospy.loginfo("Parse Configured")
 
 class DepthaiCamera():
-    res = [416, 416]
+    res = [640, 480]
     fps = 20.0
 
     pub_topic = '/depthai_node/image/compressed'
@@ -87,18 +87,55 @@ class DepthaiCamera():
         self.pub_object_detect = rospy.Publisher(self.pub_topic_objects, Float32MultiArray, queue_size=10)
         # Create a publisher for the CameraInfo topic
         self.pub_cam_inf = rospy.Publisher(self.pub_topic_cam_inf, CameraInfo, queue_size=10)
+        # Subscribe to the refined pose request
+        self.sub_refined_pose = rospy.Subscriber('refined_pose', UInt8, self.callback_refined_pose)
         # Create a timer for the callback
         self.timer = rospy.Timer(rospy.Duration(1.0 / 10), self.publish_camera_info, oneshot=False)
 
         self.br = CvBridge()
         self.published_objects = set()
+        self.re_estimation = defaultdict(lambda: deque(maxlen=5))
+        self.avg_corners_cache = {}  # Cache for storing the last calculated average corners
+        # Keep Unique IDs after 5 counts
+        self.coordinate_buffers = defaultdict(lambda: deque(maxlen=5))
 
-        # Keep Unique IDs after 10 counts
-        self.coordinate_buffers = defaultdict(lambda: deque(maxlen=10)) 
-
+        # Trigger second pose values
+        self.refined_pose = defaultdict(lambda: False)
         rospy.loginfo("Publishing to all topics initialised")
         #rospy.on_shutdown(lambda: self.shutdown())
 
+    def callback_refined_pose(self, msg):
+        class_ID = msg.data
+        rospy.loginfo(f"Received refined pose request for Object Class: {class_ID}")
+
+        # Clear the buffer and reset detection for re-estimation
+        if class_ID in self.avg_corners_cache:
+            rospy.loginfo(f"Clearing buffer and retriggering detection for Object Class: {class_ID}")
+            self.coordinate_buffers[class_ID].clear()
+            self.published_objects.discard(class_ID)  # Allow re-publication after re-detection
+
+    # def callback_refined_pose(self, msg):
+    #     class_ID = msg.data
+    #     rospy.loginfo(f"Received new UAV position to refine Marker POSE")
+
+    #     # Set the flag to trigger re-estimation for this marker ID
+    #     if class_ID in self.avg_corners_cache:
+    #         rospy.loginfo(f"Resending the average corners for Object Class: {class_ID}")
+    #         self.resend_avg_corners(class_ID)
+
+    # def resend_avg_corners(self, marker_ID):
+    #     # resend the cached average when reestimation is required
+    #     if marker_ID in self.avg_corners_cache:
+    #         avg_corners, marker_length_x, marker_length_y = self.avg_corners_cache[marker_ID]
+
+    #         # Publish the object detection with the cached average corners
+    #         refined_object_detection_msg = Float32MultiArray()
+    #         refined_object_detection_msg.data = [float(marker_ID)] + [coord for point in avg_corners for coord in point] + [marker_length_x, marker_length_y]
+
+    #         # Republish the previously calculated data
+    #         self.pub_object_detect.publish(refined_object_detection_msg)
+    #         rospy.loginfo(f"Resent refined object detection for Marker ID: {marker_ID}")
+  
     def publish_object_data(self, frame, detection):
         # Structure IDs based on labels to avoid class confusion, Nav uses 101 and 102 for objects, and 0 - 100 inc for arucos
         if labels[detection.label] == "backpack":
@@ -127,9 +164,12 @@ class DepthaiCamera():
         # Append the detection to the buffer
         self.coordinate_buffers[object_id].append(corners.flatten())
 
-        if len(self.coordinate_buffers[object_id]) == 10 and object_id not in self.published_objects:
+        if len(self.coordinate_buffers[object_id]) == 5 and object_id not in self.published_objects:
             # Compute average coordinates
             avg_corners = np.mean(self.coordinate_buffers[object_id], axis=0).reshape((4, 2))
+
+            # Cache the average corners for potential re-estimation
+            # self.avg_corners_cache[object_id] = (avg_corners, marker_length_x, marker_length_y)
             
             # Publish Object box data and coordinates 
             object_detection_msg = Float32MultiArray()
@@ -315,6 +355,10 @@ class DepthaiCamera():
         # Define a source - color camera
         if cam_source == 'rgb':
             cam = pipeline.create(dai.node.ColorCamera)
+            # current_fov = cam.getFov()
+            # print(f"Current FOV: {current_fov}")
+            # cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
+            # cam.setIspScale(1,1)
             cam.setPreviewSize(self.nn_shape_w,self.nn_shape_h)
             cam.setInterleaved(False)
             cam.preview.link(detection_nn.input)
@@ -359,7 +403,7 @@ class DepthaiCamera():
 
 # Main Code
 def main():
-    global speak_pub 
+    # global speak_pub 
 # Set up the publisher for spoken text on the 'spoken_text' topic
     #speak_pub = rospy.Publisher('spoken_text', String, queue_size=10)
     rospy.init_node('depthai_node')

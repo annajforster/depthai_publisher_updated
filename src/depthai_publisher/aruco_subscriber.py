@@ -18,7 +18,7 @@ class ArucoDetector():
         self.image_pub = rospy.Publisher(
             '/processed_aruco/image/compressed', CompressedImage, queue_size=10)  # Publisher for processed images
 
-        self.aruco_detection_pub = rospy.Publisher('/aruco_detection', Float32MultiArray, queue_size=10)  # Publisher for marker data
+        self.aruco_detection_pub = rospy.Publisher('/aruco_detection', Float32MultiArray, queue_size=5)  # Publisher for marker data
 
         self.br = CvBridge()
         self.frame = None  # Shared resource between threads
@@ -117,16 +117,16 @@ class ArucoDetector():
                 self.marker_corners[marker_ID]['count'] += 1
 
                 # Only publish after 10 detections
-                if self.marker_corners[marker_ID]['count'] == 10:
+                if self.marker_corners[marker_ID]['count'] == 5:
                     # Calculate the average coordinates for each corner
-                    avg_tl_x = self.marker_corners[marker_ID]['sum_tl_x'] / 10
-                    avg_tl_y = self.marker_corners[marker_ID]['sum_tl_y'] / 10
-                    avg_tr_x = self.marker_corners[marker_ID]['sum_tr_x'] / 10
-                    avg_tr_y = self.marker_corners[marker_ID]['sum_tr_y'] / 10
-                    avg_br_x = self.marker_corners[marker_ID]['sum_br_x'] / 10
-                    avg_br_y = self.marker_corners[marker_ID]['sum_br_y'] / 10
-                    avg_bl_x = self.marker_corners[marker_ID]['sum_bl_x'] / 10
-                    avg_bl_y = self.marker_corners[marker_ID]['sum_bl_y'] / 10
+                    avg_tl_x = self.marker_corners[marker_ID]['sum_tl_x'] / 5
+                    avg_tl_y = self.marker_corners[marker_ID]['sum_tl_y'] / 5
+                    avg_tr_x = self.marker_corners[marker_ID]['sum_tr_x'] / 5
+                    avg_tr_y = self.marker_corners[marker_ID]['sum_tr_y'] / 5
+                    avg_br_x = self.marker_corners[marker_ID]['sum_br_x'] / 5
+                    avg_br_y = self.marker_corners[marker_ID]['sum_br_y'] / 5
+                    avg_bl_x = self.marker_corners[marker_ID]['sum_bl_x'] / 5
+                    avg_bl_y = self.marker_corners[marker_ID]['sum_bl_y'] / 5
 
                     # Log the averaged corner coordinates
                     rospy.loginfo(f"Averaged corners for Marker {marker_ID}: "
